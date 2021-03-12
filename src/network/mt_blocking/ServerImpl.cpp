@@ -32,7 +32,10 @@ namespace MTblocking {
 ServerImpl::ServerImpl(std::shared_ptr<Afina::Storage> ps, std::shared_ptr<Logging::Service> pl) : Server(ps, pl) {}
 
 // See Server.h
-ServerImpl::~ServerImpl() {}
+ServerImpl::~ServerImpl() {
+	Stop();
+	Join();
+}
 
 // See Server.h
 void ServerImpl::Start(uint16_t port, uint32_t n_accept, uint32_t n_workers) {
@@ -91,12 +94,14 @@ void ServerImpl::Stop() {
 
 // See Server.h
 void ServerImpl::Join() {
-	assert(_thread.joinable());
-	_thread.join();
-	std::unique_lock<std::mutex> lock(_server_mutex);
-	while (!_client_sockets.empty())
+	if (_thread.joinable())
 	{
-		_cond_var.wait(lock);
+		_thread.join();
+		std::unique_lock<std::mutex> lock(_clients_mutex);
+		while (!_client_sockets.empty())
+		{
+			_cond_var.wait(lock);
+		}
 	}
 }
 
@@ -107,7 +112,7 @@ void ServerImpl::OnRun() {
 	// - command_to_execute: last command parsed out of stream
 	// - arg_remains: how many bytes to read from stream to get command argument
 	// - argument_for_command: buffer stores argument
-	std::size_t arg_remains;
+	std::size_t arg_remains = 0;
 	Protocol::Parser parser;
 	std::string argument_for_command;
 	std::unique_ptr<Execute::Command> command_to_execute;
@@ -115,7 +120,7 @@ void ServerImpl::OnRun() {
 		_logger->debug("waiting for connection...");
 
 		// The call to accept() blocks until the incoming connection arrives
-		int client_socket;
+		int client_socket = 0;
 		struct sockaddr client_addr;
 		socklen_t client_addr_len = sizeof(client_addr);
 		if ((client_socket = accept(_server_socket, (struct sockaddr *)&client_addr, &client_addr_len)) == -1) 
@@ -259,7 +264,7 @@ void ServerImpl::Worker(int client_socket) {
 	close(client_socket);
 	_client_sockets.erase(client_socket);
 
-	if (_client_sockets.empty())
+	if ((_client_sockets.empty()) && !(running.load()))
 		_cond_var.notify_all();
 }
 
