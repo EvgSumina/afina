@@ -18,5 +18,11 @@ set(SOURCE_FILES
 )
 
 add_library(Network ${SOURCE_FILES})
+<<<<<<< HEAD
 target_link_libraries(Network pthread Logging Protocol Execute Coroutine Concurrency ${CMAKE_THREAD_LIBS_INIT})
 
+||||||| 4f4a358
+target_link_libraries(Network pthread Logging Protocol Execute Coroutine ${CMAKE_THREAD_LIBS_INIT})
+=======
+target_link_libraries(Network pthread Logging Protocol Execute Coroutine Concurrency ${CMAKE_THREAD_LIBS_INIT})
+>>>>>>> 018c31987091fc776b09234c3ebad4a6d1a15383
