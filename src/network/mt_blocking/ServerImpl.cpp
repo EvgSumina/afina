@@ -21,6 +21,7 @@
 #include <afina/Storage.h>
 #include <afina/execute/Command.h>
 #include <afina/logging/Service.h>
+#include <afina/concurrency/Executor.h>
 
 #include "protocol/Parser.h"
 
@@ -52,7 +53,7 @@ void ServerImpl::Start(uint16_t port, uint32_t n_accept, uint32_t n_workers) {
 
 	struct sockaddr_in server_addr;
 	std::memset(&server_addr, 0, sizeof(server_addr));
-	server_addr.sin_family = AF_INET;		 // IPv4
+	server_addr.sin_family = AF_INET;		// IPv4
 	server_addr.sin_port = htons(port);	   // TCP port number
 	server_addr.sin_addr.s_addr = INADDR_ANY; // Bind to any address
 
@@ -78,7 +79,11 @@ void ServerImpl::Start(uint16_t port, uint32_t n_accept, uint32_t n_workers) {
 	}
 
 	running.store(true);
+
+	std::unique_lock<std::mutex> __lock(_clients_mutex);
+	_client_sockets.insert(_server_socket);
 	_thread = std::thread(&ServerImpl::OnRun, this);
+	_thread.detach();
 }
 
 // See Server.h
@@ -116,6 +121,8 @@ void ServerImpl::OnRun() {
 	Protocol::Parser parser;
 	std::string argument_for_command;
 	std::unique_ptr<Execute::Command> command_to_execute;
+	Afina::Concurrency::Executor executor("Executor", 2, 8, 128, 3000);
+    executor.Start();
 	while (running.load()) {
 		_logger->debug("waiting for connection...");
 
@@ -153,19 +160,32 @@ void ServerImpl::OnRun() {
 		// TODO: Start new thread and process data from/to connection
 		{
 			std::lock_guard<std::mutex> lock(_clients_mutex);
-			if ((running.load()) && (_client_sockets.size() <= _max_number))
+			if (!(running.load()) || (_client_sockets.size() > _max_number))
 			{
-				_client_sockets.insert(client_socket);
-				std::thread(&ServerImpl::Worker, this, client_socket).detach();
-			}
-			else
 				close(client_socket);
-		}
+			}
+			if(executor.Execute(&ServerImpl::Worker, this, client_socket))
+			{
+                _client_sockets.insert(client_socket);
+			} else {
+				_logger->error("Pool can't process your connection");
+				close(client_socket);
+			}
+		}	
 	}
 
 	// Cleanup on exit...
 	_logger->warn("Network stopped");
 	close(_server_socket);
+	executor.Stop(true);
+    {
+		std::unique_lock<std::mutex> __lock(_clients_mutex);
+		_client_sockets.erase(_server_socket);
+		if(_client_sockets.empty() && !(running.load()))
+		{
+			_cond_var.notify_all();
+		}
+	}
 }
 	
 void ServerImpl::Worker(int client_socket) {
